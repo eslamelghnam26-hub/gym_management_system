@@ -1,0 +1,90 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // -------------------------------------------------------------------------
+    // Role helpers — read the user's role from their document in `users`.
+    // The web admin dashboard manages these roles under "المستخدمون والصلاحيات".
+    // -------------------------------------------------------------------------
+    function signedIn() {
+      return request.auth != null;
+    }
+    function role() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+    function inRole(roles) {
+      return signedIn() && role() in roles;
+    }
+    function isAdmin()  { return inRole(['admin']); }
+    function isStaff()  { return inRole(['admin', 'receptionist', 'trainer']); }
+    function isOffice() { return inRole(['admin', 'receptionist']); }
+
+    // users — account roles are admin-managed; everyone reads their own profile.
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow write: if isAdmin() && request.resource.data.keys().hasAll(['uid', 'email', 'name', 'role', 'createdAt']);
+      allow delete: if isAdmin();
+    }
+
+    // members — staff view & record; office manages.
+    match /members/{id} {
+      allow read: if isStaff();
+      allow write: if isOffice();
+      allow delete: if isAdmin();
+    }
+
+    // trainers — staff view; admin manages.
+    match /trainers/{id} {
+      allow read: if isStaff();
+      allow write, delete: if isAdmin();
+    }
+
+    // membership_plans — public to signed-in users; office manages.
+    match /membership_plans/{id} {
+      allow read: if signedIn();
+      allow write, delete: if isOffice();
+    }
+
+    // subscriptions — office (and admin) manage; members read their own.
+    match /subscriptions/{id} {
+      allow read: if isOffice() || (signedIn() && request.auth.uid == resource.data.memberId);
+      allow write, delete: if isOffice();
+    }
+
+    // attendance — trainers and office record check-ins; staff read.
+    match /attendance/{id} {
+      allow read: if isStaff();
+      allow create, update: if inRole(['admin', 'receptionist', 'trainer']);
+      allow delete: if isOffice();
+    }
+
+    // payments — office manages; members read their own.
+    match /payments/{id} {
+      allow read: if isOffice() || (signedIn() && request.auth.uid == resource.data.memberId);
+      allow write, delete: if isOffice();
+    }
+
+    // expenses — office reads; admin manages (reception reads but cannot write).
+    match /expenses/{id} {
+      allow read: if isOffice();
+      allow write, delete: if isAdmin();
+    }
+
+    // announcements — visible to every signed-in user; admin manages.
+    match /announcements/{id} {
+      allow read: if signedIn();
+      allow write, delete: if isAdmin();
+    }
+
+    // notifications — staff read; admin composes.
+    match /notifications/{id} {
+      allow read: if isStaff() || (signedIn() && request.auth.uid == resource.data.target);
+      allow write, delete: if isAdmin();
+    }
+
+    // gym_settings — public info for signed-in users; admin edits.
+    match /gym_settings/{doc} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+  }
+}
